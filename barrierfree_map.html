@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>배리어프리 맵 — 실습</title>
+  <!--
+    배리어프리 맵 예제 (단일 파일)
+    사용 기술: HTML5, CSS, Vanilla JS, Leaflet (CDN)
+    접근성 기능:
+      - Skip link
+      - 시맨틱 랜드마크(role="banner", "main", "navigation")
+      - 키보드 접근성 (탭, 단축키 K:검색, M:맵)
+      - 명확한 폼 레이블과 ARIA
+      - 고대비/큰 글씨 모드 지원 (CSS 변수)
+      - 화면판독기용 버튼 라벨
+    수정 방법: 아래 sampleData 배열에 POI를 추가하거나 수정하세요.
+  -->
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="" crossorigin="" />
+  <style>
+    :root{
+      --bg:#f7f7f7; --card:#fff; --text:#111; --accent:#0078d4; --muted:#555;
+      --focus: 3px solid Highlight;
+    }
+    @media (prefers-contrast: more){
+      :root{ --accent:#004c8c; }
+    }
+    html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,'Noto Sans',sans-serif;color:var(--text);background:var(--bg)}
+    a.skip-link{position:absolute;left:-999px;top:auto;width:1px;height:1px;overflow:hidden}
+    a.skip-link:focus{left:8px;top:8px;padding:8px;background:#000;color:#fff;z-index:9999}
+
+    header[role=banner]{background:var(--accent);color:#fff;padding:12px 16px}
+    header h1{margin:0;font-size:1.25rem}
+    .container{display:grid;grid-template-columns:360px 1fr;gap:12px;padding:12px}
+
+    /* 사이드바 */
+    aside{background:var(--card);padding:12px;border-radius:10px;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+    label{display:block;margin-bottom:6px;font-weight:600}
+    input[type=text],select{width:100%;padding:8px;border:1px solid #ddd;border-radius:6px}
+    .btn{display:inline-block;padding:8px 10px;border-radius:8px;border:none;background:var(--accent);color:#fff;cursor:pointer;margin:6px 4px}
+    .btn:focus{outline:var(--focus)}
+    .poi-list{margin-top:12px;max-height:56vh;overflow:auto}
+    .poi{padding:8px;border-bottom:1px solid #eee}
+    .poi button{background:#eee;border:none;padding:6px 8px;border-radius:6px;cursor:pointer}
+
+    /* 맵 영역 */
+    #map{height:78vh;border-radius:10px}
+    .mapcard{background:var(--card);padding:8px;border-radius:8px;position:relative}
+
+    /* 반응형 */
+    @media (max-width:900px){.container{grid-template-columns:1fr;}.poi-list{max-height:28vh}#map{height:56vh}}
+
+    /* 접근성 표시 */
+    .visually-hidden{position:absolute!important;height:1px;width:1px;overflow:hidden;clip:rect(1px,1px,1px,1px);white-space:nowrap}
+
+    /* 포커스 스타일 강화 */
+    :focus{outline:var(--focus)}
+  </style>
+</head>
+<body>
+  <a href="#main" class="skip-link">본문으로 건너뛰기</a>
+  <header role="banner">
+    <h1>배리어프리 맵</h1>
+    <p class="visually-hidden">장애 친화적 시설(경사로, 엘리베이터, 접근 가능한 화장실)을 찾을 수 있는 예제 사이트</p>
+  </header>
+
+  <div class="container">
+    <aside role="complementary" aria-labelledby="filters-heading">
+      <h2 id="filters-heading">필터 & 검색</h2>
+
+      <label for="search">장소 검색 (단축키: K)</label>
+      <input id="search" type="text" aria-label="장소 검색" placeholder="카페, 도서관, 병원..." />
+      <div style="margin-top:8px">
+        <label for="feature">필터</label>
+        <select id="feature" aria-label="접근성 필터">
+          <option value="all">모두 보기</option>
+          <option value="ramp">경사로(램프)</option>
+          <option value="elevator">엘리베이터</option>
+          <option value="toilet">휠체어 접근 가능 화장실</option>
+        </select>
+      </div>
+      <div style="margin-top:10px">
+        <button id="searchBtn" class="btn">검색</button>
+        <button id="resetBtn" class="btn" style="background:#6c6c6c">초기화</button>
+      </div>
+
+      <section aria-labelledby="list-heading" style="margin-top:12px">
+        <h3 id="list-heading">검색 결과</h3>
+        <div class="poi-list" id="poiList" tabindex="0" aria-live="polite"></div>
+      </section>
+
+      <footer style="margin-top:12px;font-size:.9rem;color:var(--muted)">
+        <p>키보드: Tab으로 탐색, Enter로 선택</p>
+        <p>단축키: <strong>K</strong> = 검색으로 포커스, <strong>M</strong> = 맵으로 포커스</p>
+      </footer>
+    </aside>
+
+    <main id="main" role="main">
+      <div class="mapcard" role="region" aria-label="지도와 장소 정보">
+        <div id="map" tabindex="0" aria-label="배리어프리 지도가 표시되는 영역"></div>
+      </div>
+    </main>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    // 샘플 데이터: 실제 서비스에서는 서버에서 GeoJSON을 받아옵니다.
+    const sampleData = [
+      {id:1,name:'서울시청',lat:37.5665,lng:126.9780,features:['ramp','toilet'],desc:'공공청사 — 경사로, 접근가능 화장실'},
+      {id:2,name:'시립도서관',lat:37.5651,lng:126.98955,features:['elevator','toilet'],desc:'장애인 엘리베이터 보유'},
+      {id:3,name:'중앙카페',lat:37.5678,lng:126.9769,features:['ramp'],desc:'작은 경사로로 접근 가능'}
+    ];
+
+    // 지도 초기화
+    const map = L.map('map', {keyboard:true,zoomControl:true}).setView([37.5665,126.9780],14);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+      attribution:'&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    // 마커 그룹
+    const markers = L.layerGroup().addTo(map);
+
+    function createMarker(poi){
+      const marker = L.marker([poi.lat,poi.lng],{title:poi.name,keyboard:true});
+      const popupContent = `<strong>${escapeHtml(poi.name)}</strong><p>${escapeHtml(poi.desc)}</p><p>특징: ${poi.features.join(', ')}</p><button data-id="${poi.id}" class="detail-btn">상세 보기</button>`;
+      marker.bindPopup(popupContent,{minWidth:200});
+      marker.on('popupopen', ()=>{
+        // 팝업 내 버튼에 포커스 주기 (접근성)
+        const btn = document.querySelector('.detail-btn[data-id="'+poi.id+'"]');
+        if(btn) btn.setAttribute('aria-label', poi.name + ' 상세 보기');
+      });
+      return marker;
+    }
+
+    // 초기 렌더
+    function renderAll(data){
+      markers.clearLayers();
+      const list = document.getElementById('poiList'); list.innerHTML='';
+      data.forEach(poi=>{
+        const m = createMarker(poi);
+        m.addTo(markers);
+
+        const item = document.createElement('div'); item.className='poi'; item.tabIndex=0;
+        item.innerHTML = `<strong>${poi.name}</strong><div>${poi.features.join(', ')}</div><div style="margin-top:6px"><button class="btn" data-id="${poi.id}">지도에서 보기</button></div>`;
+        list.appendChild(item);
+
+        // 버튼 이벤트
+        item.querySelector('button').addEventListener('click', ()=>{
+          map.setView([poi.lat,poi.lng],17);
+          m.openPopup();
+        });
+
+        // 엔터 키로도 열기
+        item.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ item.querySelector('button').click(); } });
+      });
+    }
+
+    // 검색/필터
+    function filterAndRender(){
+      const q = document.getElementById('search').value.trim().toLowerCase();
+      const f = document.getElementById('feature').value;
+      const res = sampleData.filter(p=>{
+        const matchQ = !q || p.name.toLowerCase().includes(q) || p.desc.toLowerCase().includes(q);
+        const matchF = (f==='all') || p.features.includes(f);
+        return matchQ && matchF;
+      });
+      renderAll(res);
+      // 안내: 결과 수
+      const list = document.getElementById('poiList');
+      if(res.length===0) list.innerHTML = '<p role="status">검색 결과가 없습니다.</p>';
+    }
+
+    document.getElementById('searchBtn').addEventListener('click', filterAndRender);
+    document.getElementById('resetBtn').addEventListener('click', ()=>{document.getElementById('search').value='';document.getElementById('feature').value='all';filterAndRender();});
+
+    // 키보드 단축키
+    document.addEventListener('keydown', (e)=>{
+      if(e.key==='k' || e.key==='K'){ e.preventDefault(); document.getElementById('search').focus(); }
+      if(e.key==='m' || e.key==='M'){ e.preventDefault(); document.getElementById('map').focus(); }
+    });
+
+    // HTML 이스케이프
+    function escapeHtml(s){ return String(s).replace(/[&<>"]/g, function(ch){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]); }); }
+
+    // 초기 호출
+    renderAll(sampleData);
+
+    // 화면 판독기용: 지도가 로드된 후 알림
+    map.whenReady(()=>{
+      const list = document.getElementById('poiList');
+      const sr = document.createElement('div'); sr.className='visually-hidden'; sr.setAttribute('role','status'); sr.textContent = '지도와 장소 목록이 준비되었습니다.'; list.prepend(sr);
+    });
+
+    // 추가 아이디어 (실무 적용 시)
+    // - GeoJSON 형식의 서버 API 연결
+    // - CSV/Excel로 내보내기, ARIA 표와 연동
+    // - 필터에 '경사로 경사도', '문턱 높이' 같은 세부 수치 추가
+    // - 현장 촬영 이미지와 대체 텍스트 제공
+  </script>
+</body>
+</html>
